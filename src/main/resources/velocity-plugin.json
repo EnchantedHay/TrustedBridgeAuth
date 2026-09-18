@@ -1,0 +1,8 @@
+{
+  "id": "trusted-bridge-auth",
+  "name": "TrustedBridgeAuth",
+  "version": "3.0.2",
+  "description": "Secure player transfers between trusted Velocity networks, with automatic reconnect and online authentication for regular logins.",
+  "authors": ["PKUMC"],
+  "main": "top.pkumc.trustedbridgeauth.TrustedBridgeAuth"
+}
