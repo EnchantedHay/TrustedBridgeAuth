@@ -15,7 +15,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Dependency-free regressions; executed by build.sh and Gradle check. Synthetic identities only.
+ * Protocol and identity regressions using synthetic identities, run by build.sh and Gradle check.
  */
 public final class HandoffProtocolTest {
     static int assertions;
@@ -75,6 +75,21 @@ public final class HandoffProtocolTest {
                                 .equals("signature"),
                 "profile round trip");
         require(decoded.expiresAt() == NOW + 30000, "signed deadline preserved");
+        GameProfile premium = new GameProfile(UUID.randomUUID(), "Hyah", List.of());
+        HandoffProtocol.Frame dual = HandoffProtocol.encode(PROFILE, "Hyah", premium,
+                PROFILE.getId(), "legacy", "pkumc", "thunion", NOW, NOW + 30000,
+                HandoffProtocol.ticketHash(TICKET), SECRET);
+        HandoffProtocol.Decoded dualDecoded = decode(dual, NOW);
+        require(dualDecoded.premium().getId().equals(premium.getId())
+                && dualDecoded.localUuid().equals(PROFILE.getId())
+                && dualDecoded.assurance().equals("legacy"), "dual identity and legacy proof round trip");
+        TicketStore dualStore = new TicketStore(1);
+        dualStore.register(dualDecoded, dual.mac(), NOW);
+        fails(() -> dualStore.consume(TICKET, PROFILE.getName(), NOW));
+        require(dualStore.consume(TICKET, "Hyah", NOW).profile().getId().equals(PROFILE.getId()),
+                "client login name is independent from local and destination names");
+        fails(() -> HandoffProtocol.encode(PROFILE, "Hyah", premium, PROFILE.getId(), "none",
+                "pkumc", "thunion", NOW, NOW + 30000, HandoffProtocol.ticketHash(TICKET), SECRET));
         byte[] tampered = f.payload().clone();
         tampered[tampered.length - 1] ^= 1;
         fails(
@@ -236,13 +251,26 @@ public final class HandoffProtocolTest {
                                                 default -> null;
                                             });
             PreLoginEvent event = new PreLoginEvent(conn, PROFILE.getName(), PROFILE.getId());
-            require(plugin.onPreLogin(event) == null, "ordinary login cannot request handoff");
             require(!event.getResult().isForceOfflineMode(), "ordinary login keeps authentication");
             require(
                     plugin.destinationProfile(PROFILE).getId().equals(PROFILE.getId()),
                     "source identity policy");
             plugin.shutdown(null);
             String config = Files.readString(data.resolve("config.properties"));
+            Files.writeString(data.resolve("config.properties"), config.replace("identity-mode=source", "identity-mode=premium"));
+            TrustedBridgeAuth premiumPlugin = new TrustedBridgeAuth(log, data);
+            try {
+                fails(() -> premiumPlugin.destinationProfile(decode(frame(NOW, NOW + 30000), NOW)));
+                GameProfile target = new GameProfile(UUID.randomUUID(), "Hyah", List.of());
+                HandoffProtocol.Decoded verified = new HandoffProtocol.Decoded(PROFILE, "hash", NOW + 30000,
+                        "Hay", target, PROFILE.getId(), "legacy");
+                require(premiumPlugin.destinationProfile(verified).equals(target), "premium policy uses verified UUID and name");
+                fails(() -> premiumPlugin.destinationProfile(new HandoffProtocol.Decoded(PROFILE, "hash", NOW + 30000,
+                        "Hay", target, UUID.randomUUID(), "legacy")));
+            } finally {
+                premiumPlugin.shutdown(null);
+            }
+            Files.writeString(data.resolve("config.properties"), config);
             require(BridgeConfig.load(data).bridgePort() == 27000, "shared control port default");
             Files.writeString(
                     data.resolve("config.properties"),

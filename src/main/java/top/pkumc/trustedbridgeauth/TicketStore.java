@@ -35,7 +35,7 @@ final class TicketStore {
             throw new IOException("Missing ticket");
         String hash = HexFormat.of().formatHex(HandoffProtocol.ticketHash(ticket));
         Entry entry = entries.get(hash);
-        if (entry == null || entry.used() || !entry.handoff().profile().getName().equals(username))
+        if (entry == null || entry.used() || !entry.handoff().loginName().equals(username))
             throw new IOException("Invalid, expired, used, or mismatched ticket");
         entries.put(hash, new Entry(entry.handoff(), entry.signature(), true));
         return entry.handoff();

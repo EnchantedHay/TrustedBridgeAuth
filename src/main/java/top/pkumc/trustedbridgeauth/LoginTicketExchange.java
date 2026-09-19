@@ -38,7 +38,16 @@ final class LoginTicketExchange {
 
     private MinecraftConnection connection(InboundConnection inbound)
             throws ReflectiveOperationException {
+        if (inbound instanceof ConnectedPlayer player) return player.getConnection();
         return (MinecraftConnection) connectionMethod.invoke(inbound);
+    }
+
+    Object connectionKey(InboundConnection inbound) {
+        try {
+            return connection(inbound);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Unsupported connection", e);
+        }
     }
 
     void disconnect(InboundConnection inbound, String message) {
@@ -95,6 +104,15 @@ final class LoginTicketExchange {
     }
 
     CompletableFuture<byte[]> request(InboundConnection inbound, int timeoutMillis) {
+        return request(inbound, timeoutMillis, false);
+    }
+
+    CompletableFuture<String> premiumSession(InboundConnection inbound, int timeoutMillis) {
+        return request(inbound, timeoutMillis, true).thenApply(
+                bytes -> new String(bytes, java.nio.charset.StandardCharsets.US_ASCII));
+    }
+
+    private CompletableFuture<byte[]> request(InboundConnection inbound, int timeoutMillis, boolean authenticate) {
         CompletableFuture<byte[]> result = new CompletableFuture<>();
         try {
             MinecraftConnection mc = connection(inbound);
@@ -141,6 +159,11 @@ final class LoginTicketExchange {
                                                                         "Invalid shared key");
                                                             mc.enableEncryption(secret);
                                                             encrypted = true;
+                                                            if (authenticate) {
+                                                                result.complete(EncryptionUtils.generateServerId(secret, keyPair.getPublic())
+                                                                        .getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                                                                return;
+                                                            }
                                                             mc.write(
                                                                     new ClientboundCookieRequestPacket(
                                                                             COOKIE));
@@ -216,7 +239,7 @@ final class LoginTicketExchange {
                                     EncryptionRequestPacket request = new EncryptionRequestPacket();
                                     request.setPublicKey(keyPair.getPublic().getEncoded());
                                     request.setVerifyToken(challenge);
-                                    authenticateField.setBoolean(request, false);
+                                    authenticateField.setBoolean(request, authenticate);
                                     mc.write(request);
                                 } catch (Exception e) {
                                     result.completeExceptionally(e);

@@ -17,7 +17,7 @@ final class BridgeLink implements AutoCloseable {
         byte[] receive(HandoffProtocol.Frame frame) throws IOException;
     }
 
-    private static final int MAGIC = 0x54424c33;
+    private static final int MAGIC = 0x54424c34;
     private final BridgeConfig config;
     private final Receiver receiver;
     private final BridgeStatus status;
@@ -195,12 +195,6 @@ final class BridgeLink implements AutoCloseable {
 
     private record Packet(int type, long id, byte[] body) {}
 
-    private static final class HandoffRejectedException extends IOException {
-        HandoffRejectedException() {
-            super("Peer rejected handoff");
-        }
-    }
-
     private final class Session {
         final SSLSocket socket;
         final DataInputStream in;
@@ -227,7 +221,7 @@ final class BridgeLink implements AutoCloseable {
                     || frame.payload().length > HandoffProtocol.MAX_FRAME_SIZE
                     || frame.mac().length != HandoffProtocol.MAC_LENGTH)
                 throw new IOException("Invalid outbound handoff size");
-            if (!slots.tryAcquire()) throw new IOException("Too many pending handoffs");
+            if (!slots.tryAcquire()) throw new TransferFailure(TransferFailure.Reason.BUSY);
             long id = sequence.incrementAndGet();
             CompletableFuture<byte[]> result = new CompletableFuture<>();
             try {
@@ -246,7 +240,7 @@ final class BridgeLink implements AutoCloseable {
                     throw failure;
                 }
             } catch (ExecutionException e) {
-                if (e.getCause() instanceof HandoffRejectedException rejection) throw rejection;
+                if (e.getCause() instanceof TransferFailure rejection) throw rejection;
                 closeWithCause(e);
                 throw new IOException("Handoff not acknowledged", e);
             } catch (TimeoutException e) {
@@ -280,7 +274,7 @@ final class BridgeLink implements AutoCloseable {
                                 && size <= HandoffProtocol.MAX_FRAME_SIZE + HandoffProtocol.MAC_LENGTH;
                         case 2 -> id > 0 && size == HandoffProtocol.MAC_LENGTH;
                         case 3 -> id == 0 && size == 0;
-                        case 4 -> id > 0 && size == 0;
+                        case 4 -> id > 0 && size == 1;
                         default -> false;
                     };
                     if (!valid) throw new IOException("Invalid link message header");
@@ -297,15 +291,17 @@ final class BridgeLink implements AutoCloseable {
                     try {
                         enqueue(new Packet(2, id, receiver.receive(frame)));
                     } catch (IOException e) {
-                        enqueue(new Packet(4, id, new byte[0]));
+                        TransferFailure.Reason reason = e instanceof TransferFailure failure
+                                ? failure.reason : TransferFailure.Reason.REJECTED;
+                        enqueue(new Packet(4, id, new byte[] {(byte) reason.ordinal()}));
                     }
                 } else if (type == 2 && size == HandoffProtocol.MAC_LENGTH) {
                     CompletableFuture<byte[]> result = pending.get(id);
                     if (result != null) result.complete(body);
-                } else if (type == 4 && size == 0) {
+                } else if (type == 4 && size == 1) {
                     CompletableFuture<byte[]> result = pending.get(id);
                     if (result != null)
-                        result.completeExceptionally(new HandoffRejectedException());
+                        result.completeExceptionally(new TransferFailure(TransferFailure.decode(Byte.toUnsignedInt(body[0]))));
                 } else if (type != 3 || id != 0 || size != 0)
                     throw new IOException("Invalid link message");
             }

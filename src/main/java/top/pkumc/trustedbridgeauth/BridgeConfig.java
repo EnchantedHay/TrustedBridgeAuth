@@ -38,7 +38,7 @@ record BridgeConfig(
         if (secret.length < 32) throw new IOException("Handoff key must have at least 32 bytes");
         int ttl = number(p, "handoff-ttl-seconds", 30, 10, 60);
         String mode = p.getProperty("identity-mode", "mapped").trim();
-        if (!Set.of("mapped", "source").contains(mode))
+        if (!Set.of("mapped", "source", "local", "premium").contains(mode))
             throw new IOException("Invalid identity mode");
         Map<UUID, UUID> mappings = new HashMap<>();
         Path mappingFile = directory.resolve("identity-map.properties");

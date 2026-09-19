@@ -23,6 +23,7 @@ public final class LoginIntegrationTest {
     static String issuer = "pkumc", audience = "thunion";
     static BridgeLink link;
     static final UUID SOURCE_ID = UUID.fromString("00000000-0000-4000-8000-000000000001");
+    static final UUID PREMIUM_ID = UUID.fromString("00000000-0000-4000-8000-000000000002");
 
     static void require(boolean b, String label) {
         if (!b) throw new AssertionError(label);
@@ -79,6 +80,8 @@ public final class LoginIntegrationTest {
         HandoffProtocol.Frame frame =
                 HandoffProtocol.encode(
                         new GameProfile(SOURCE_ID, "AuditUser", List.of()),
+                        "AuditUser", new GameProfile(PREMIUM_ID, "PremiumUser", List.of()),
+                        SOURCE_ID, "legacy",
                         issuer,
                         audience,
                         now,
@@ -136,11 +139,24 @@ public final class LoginIntegrationTest {
         }
 
         void encryptedCookie(byte[] ticket) throws Exception {
+            encryption(false);
+            DataInputStream p = read();
+            require(varint(p) == 5, "encrypted cookie request received");
+            require(string(p).equals("pkumc:trusted_bridge_v2"), "private cookie namespace");
+            ByteArrayOutputStream response = new ByteArrayOutputStream();
+            varint(response, 4);
+            string(response, "pkumc:trusted_bridge_v2");
+            response.write(ticket == null ? 0 : 1);
+            if (ticket != null) array(response, ticket);
+            send(response.toByteArray());
+        }
+
+        void encryption(boolean authenticate) throws Exception {
             DataInputStream p = read();
             require(varint(p) == 1, "encryption requested before cookie");
             string(p);
             byte[] pub = array(p), challenge = array(p);
-            require(!p.readBoolean(), "ticket login does not call external session server");
+            require(p.readBoolean() == authenticate, "encryption authentication flag matches login purpose");
             PublicKey key =
                     KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(pub));
             Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
@@ -191,15 +207,6 @@ public final class LoginIntegrationTest {
                             rawOut.flush();
                         }
                     };
-            p = read();
-            require(varint(p) == 5, "encrypted cookie request received");
-            require(string(p).equals("pkumc:trusted_bridge_v2"), "private cookie namespace");
-            response.reset();
-            varint(response, 4);
-            string(response, "pkumc:trusted_bridge_v2");
-            response.write(ticket == null ? 0 : 1);
-            if (ticket != null) array(response, ticket);
-            send(response.toByteArray());
         }
 
         boolean loginSuccess() throws Exception {
@@ -217,9 +224,9 @@ public final class LoginIntegrationTest {
                         UUID uuid = new UUID(p.readLong(), p.readLong());
                         String name = string(p);
                         require(
-                                uuid.equals(SOURCE_ID),
-                                "source UUID restored despite different LoginStart UUID");
-                        require(name.equals("AuditUser"), "authenticated profile name restored");
+                                uuid.equals(PREMIUM_ID),
+                                "premium UUID restored despite different LoginStart and source UUID");
+                        require(name.equals("PremiumUser"), "premium name differs from client login name");
                         return true;
                     }
                     throw new IOException("Unexpected login packet " + id);

@@ -56,9 +56,12 @@ public final class BridgeLinkTest {
         }
         AtomicInteger received = new AtomicInteger();
         AtomicBoolean rejectNext = new AtomicBoolean();
+        AtomicReference<TransferFailure.Reason> rejectReason = new AtomicReference<>();
         AtomicBoolean corruptAck = new AtomicBoolean();
         BridgeLink.Receiver handler =
                 frame -> {
+                    TransferFailure.Reason reason = rejectReason.getAndSet(null);
+                    if (reason != null) throw new TransferFailure(reason);
                     if (rejectNext.getAndSet(false)) throw new IOException("Policy rejection");
                     received.incrementAndGet();
                     if (corruptAck.getAndSet(false)) return new byte[HandoffProtocol.MAC_LENGTH];
@@ -106,8 +109,23 @@ public final class BridgeLinkTest {
                 client.send(frame);
                 throw new AssertionError("Rejected handoff accepted");
             } catch (IOException expected) {
-                require(expected.getMessage().equals("Peer rejected handoff"), "rejection preserves cause");
+                require(expected instanceof TransferFailure && ((TransferFailure) expected).reason == TransferFailure.Reason.REJECTED,
+                        "unknown rejection uses safe generic reason");
             }
+            for (TransferFailure.Reason reason : TransferFailure.Reason.values()) {
+                for (BridgeLink sender : List.of(client, server)) {
+                    rejectReason.set(reason);
+                    try {
+                        sender.send(frame);
+                        throw new AssertionError("Rejected handoff accepted");
+                    } catch (TransferFailure expected) {
+                        require(expected.reason == reason, "typed reason survives either direction");
+                        require(TransferFailure.message(new ExecutionException(expected), "fallback").equals(reason.message),
+                                "wrapped failure displays public reason");
+                    }
+                }
+            }
+            require(TransferFailure.decode(255) == TransferFailure.Reason.REJECTED, "unknown wire reason is safe");
             require(client.connected() && server.connected(), "policy rejection preserves shared connection");
             try {
                 client.send(new HandoffProtocol.Frame(new byte[HandoffProtocol.MAX_FRAME_SIZE + 1], new byte[32]));
@@ -170,12 +188,12 @@ public final class BridgeLinkTest {
         socket.setSoTimeout(3000);
         socket.startHandshake();
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-        out.writeInt(0x54424c33);
+        out.writeInt(0x54424c34);
         out.writeUTF("thunion");
         out.writeUTF("pkumc");
         out.flush();
         DataInputStream in = new DataInputStream(socket.getInputStream());
-        require(in.readInt() == 0x54424c33 && in.readUTF().equals("pkumc")
+        require(in.readInt() == 0x54424c34 && in.readUTF().equals("pkumc")
                 && in.readUTF().equals("thunion"), "raw peer identity exchange");
         return socket;
     }
