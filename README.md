@@ -1,67 +1,37 @@
-## 连接端配置
+# TrustedBridgeAuth
 
-```properties
-network-id=pkumc
-peer-id=thunion
-bridge-role=connect
-bridge-host=bridge-b.example.com
-bridge-port=27000
-handoff-secret-file=trusted-bridge.secret
-transfer-host=play-b.example.com
-transfer-port=25565
-handoff-ttl-seconds=30
-timeout-millis=5000
-identity-mode=local
-skin-api-url=https://skin.chancelethay.top/api/trusted-bridge/
-skin-api-secret-file=skin-api.secret
+用于 PKUMC 与 THUnion 之间的跨服身份验证。玩家绑定正版账号后，可以在两服之间跳转：进入 THUnion 使用正版身份，返回 PKUMC 使用原角色。
+
+需要 Minecraft 1.20.5+ 客户端。插件适配 Velocity 4.2.1-b31；THUnion 保持正版认证，PKUMC 需配套皮肤站绑定 API。
+
+## 玩家使用
+
+在 PKUMC 皮肤站提交正版名，用正版客户端连接 PKUMC，再将游戏中显示的验证码填回皮肤站。绑定完成后即可跨服，目标服务器的白名单等准入规则照常生效。
+
+## 配置与部署
+
+两端安装相同版本的插件，将对应示例放到 `plugins/trusted-bridge-auth/config.properties`：
+
+| 服务端 | 配置示例 | 身份模式 |
+| --- | --- | --- |
+| PKUMC | [连接端配置](examples/pkumc/config.properties) | `local`，使用皮肤站角色 |
+| THUnion | [监听端配置](examples/thunion/config.properties) | `premium`，使用正版身份 |
+
+按实际部署修改地址：`bridge-host` 是 THUnion 的桥接地址，`transfer-host` 和 `transfer-port` 是玩家可访问的**对方服务器**地址与端口。
+
+1. 运行 `python3 provision-tls.py keys`，将生成的 `keys/pkumc`、`keys/thunion` 分别放到对应端的 `plugins/trusted-bridge-auth/tls`。
+2. 两端 Velocity 根目录放置相同的 `trusted-bridge.secret`，内容为随机生成的 64 位十六进制密钥。
+3. PKUMC 配置皮肤站 API 地址，并将皮肤站的 `storage/app/trusted-bridge-api.secret` 放到插件目录，命名为 `skin-api.secret`。
+4. 两端 Velocity 开启 `accepts-transfers`，在服务器列表中添加与 `peer-id` 同名的入口；玩家选择该入口时会跳转到对方服务器。
+5. 确认桥接端口互通，重启两端 Velocity。
+
+## 构建与测试
+
+需要 Java 21+，通过 `VELOCITY_JAR` 指定 Velocity JAR 路径。
+
+```sh
+./build.sh
+python3 integration-test.py
 ```
 
-## 监听端配置
-
-```properties
-network-id=thunion
-peer-id=pkumc
-bridge-role=listen
-bridge-listen-address=0.0.0.0
-bridge-port=27000
-handoff-secret-file=trusted-bridge.secret
-transfer-host=play-a.example.com
-transfer-port=25565
-handoff-ttl-seconds=30
-timeout-millis=5000
-identity-mode=premium
-```
-
-## 身份验证
-
-两端使用 TBL4 控制协议。PKUMC 使用 `local`，THUnion 使用 `premium`。
-`source` 或静态 `mapped` 不提供正版绑定验证。
-THUnion 的普通登录必须使用 Mojang 正版认证，不能把任意外置认证当作正版认证。
-
-PKUMC 的原角色名和 UUID 保持不变。跨服票据包含客户端原登录名、本站 UUID、
-正版 GameProfile 和绑定验证方式；THUnion 使用正版名字与 UUID。
-返程会实时核验绑定，并恢复明确的原角色；无返程角色且存在多个角色时拒绝登录。
-绑定验证方式支持 `legacy` 和 `login_code`。
-这里证明的是已验证的账号绑定，不要求每次跨服都通过 Microsoft 登录。
-
-`skin-api.secret` 是独立的 64 位十六进制密钥，仅 PKUMC 与皮肤站持有，
-放在插件数据目录，权限 0600；对应皮肤站的 `storage/app/trusted-bridge-api.secret`。
-API 只使用 HTTPS，不跟随重定向。THUnion 不需要也不应获取此密钥。
-未绑定、解绑、封禁、身份服务不可用时拒绝跨服。
-
-账号绑定：在皮肤站提交正版名，用该正版账号在 Minecraft 1.20.5+ 连接 PKUMC，
-连接会在正版会话验证后结束并显示一次性验证码。回到已登录的皮肤站输入验证码
-才会创建绑定。验证码为六位数字（可以以 0 开头），有效期 10 分钟、绑定申请有效期 15 分钟。
-同一正版账号累计输错 5 次后锁定验证码，更换皮肤站账号或重新申请不能重置次数；
-需要用正版客户端重新进服获取新码，新码会替换旧码。已完成的绑定不受影响。
-未绑定、缺少角色、多个角色、账号不可用及身份服务故障会显示对应提示。
-白名单由目标服务器检查，其拒绝提示不由本插件管理。
-
-## 部署与验证
-
-皮肤站运行 `install-premium.php` 初始化绑定数据表，并配置 API 密钥。
-部署皮肤站文件后重启 PHP-FPM；两端安装插件 JAR 后重启 Velocity。
-每端仅保留一个插件 JAR。
-
-验证：`./build.sh`、`python3 integration-test.py`；皮肤站执行
-`php plugins/yggdrasil-api/tests/premium-regression.php`（内存数据库、模拟 Mojang）。
+构建产物位于 `build/libs/`。
